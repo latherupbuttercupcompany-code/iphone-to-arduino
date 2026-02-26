@@ -1,0 +1,99 @@
+import 'package:flutter/material.dart';
+// If Zapp is still failing, this import is the culprit because it's a web-sandbox.
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+
+void main() => runApp(const MaterialApp(home: ArduinoWirelessApp()));
+
+class ArduinoWirelessApp extends StatefulWidget {
+  const ArduinoWirelessApp({super.key});
+
+  @override
+  State<ArduinoWirelessApp> createState() => _ArduinoWirelessAppState();
+}
+
+class _ArduinoWirelessAppState extends State<ArduinoWirelessApp> {
+  List<ScanResult> _scanResults = [];
+  BluetoothDevice? _targetDevice;
+  bool _isScanning = false;
+
+  // 1. DISCOVER THE MAKEBLOCK
+  void _toggleScan() async {
+    if (_isScanning) {
+      await FlutterBluePlus.stopScan();
+    } else {
+      setState(() => _scanResults.clear());
+      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
+    }
+    setState(() => _isScanning = !_isScanning);
+
+    FlutterBluePlus.scanResults.listen((results) {
+      if (mounted) setState(() => _scanResults = results);
+    });
+  }
+
+  // 2. CONNECT & RESET (DTR Trick)
+  void _connect(BluetoothDevice device) async {
+    try {
+      await device.connect();
+      setState(() => _targetDevice = device);
+      // Discovering services triggers the handshake needed for the DTR pin to reset the Arduino
+      await device.discoverServices();
+    } catch (e) {
+      debugPrint("Error: $e");
+    }
+  }
+
+  // 3. SEND TEST (ASCII 'H' to turn on Pin 13)
+  void _sendTestSignal() async {
+    if (_targetDevice == null) return;
+    var services = await _targetDevice!.discoverServices();
+    for (var s in services) {
+      for (var c in s.characteristics) {
+        if (c.properties.write) {
+          await c.write([0x48]); // 'H'
+        }
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Arduino BLE Programmer")),
+      body: Column(
+        children: [
+          const Padding(
+            padding: EdgeInsets.all(8.0),
+            child: Text("Status: Wiring DTR to Reset pin is required!", style: TextStyle(color: Colors.red)),
+          ),
+          ElevatedButton(
+            onPressed: _toggleScan,
+            child: Text(_isScanning ? "Stop Scanning" : "Find Makeblock"),
+          ),
+          Expanded(
+            child: ListView.builder(
+              itemCount: _scanResults.length,
+              itemBuilder: (context, index) {
+                final d = _scanResults[index].device;
+                return ListTile(
+                  title: Text(d.platformName.isEmpty ? "Unknown Device" : d.platformName),
+                  subtitle: Text(d.remoteId.toString()),
+                  onTap: () => _connect(d),
+                );
+              },
+            ),
+          ),
+          if (_targetDevice != null)
+            Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: ElevatedButton(
+                onPressed: _sendTestSignal,
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                child: const Text("SEND TEST 'H'"),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
